@@ -18,7 +18,7 @@ It also converts media using tools as FFMPEG and Magic to downsize media suitabl
 
 
 
-## The Master Orchestrator — Run-Pipeline.ps1
+##  Run-Pipeline.ps1
 
 Run-Pipeline.ps1 is the main entry point that executes all three stages sequentially:
 

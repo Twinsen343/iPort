@@ -12,7 +12,7 @@ MTP is notoriously unreliable on Windows. It’s not a true filesystem — it’
 ###Key Features
 - Safe, resumable import from iPhone or MTP (Internal Storage/DCIM/...)
 - Organized output (Images\YYYY-MM and Videos\YYYY-MM)
-- Conversion via FFmpeg & ImageMagick (H.264/H.265, JPG/PNG)
+- Conversion via FFmpeg & ImageMagick (H.264/H.265, HEIF to JPG/PNG)
 - Read-only by default (optional -DeleteAfterCopy)
 - Rich on-screen logs; no external dependencies beyond PowerShell + tools
 

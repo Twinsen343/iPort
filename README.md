@@ -35,9 +35,9 @@ MTP is notoriously unreliable on Windows. It’s not a true filesystem — it’
 
 Run-Pipeline.ps1 is the main entry point that executes all three stages sequentially:
 
-1 Copy media from iPhone
-2 Convert images
-3 Convert videos
+- 1 Copy media from iPhone
+- 2 Convert images
+- 3 Convert videos
 
 Example
 .\Run-Pipeline.ps1

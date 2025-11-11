@@ -142,8 +142,8 @@ cd iPort
 
 
 ##  Requirements
-Windows 10 / 11
-PowerShell 5.1+ (or PowerShell 7+)
-ffmpeg + ffprobe in PATH
-ImageMagick (or heif-convert) installed
-iPhone connected via USB (MTP mode)
+- Windows 10 / 11
+- PowerShell 5.1+ (or PowerShell 7+)
+- ffmpeg + ffprobe in PATH
+- ImageMagick (or heif-convert) installed
+- iPhone connected via USB (MTP mode)

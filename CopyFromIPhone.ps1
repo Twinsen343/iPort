@@ -35,50 +35,48 @@ CopyFromIPhone.ps1 — v3.6.9-MAX+ROBUST+STREAM (PS5.1-safe)
 
 [CmdletBinding()]
 param(
-  # ========= Targets / Device =========
   [Parameter(Mandatory)]
-  [string]$Destination,                  # Root output (will create Images/ and Videos/ below)
+  [string]$Destination,
 
-  [string]$DeviceName = 'iPhone',        # Device display name in 'This PC'
-  [string]$StorageFolderName = 'Internal Storage',  # Usually 'Internal Storage'
+  [string]$DeviceName = 'iPhone',
+  [string]$StorageFolderName = 'Internal Storage',
 
-  # ========= Dedupe / Layout / UX =========
-  [switch]$SkipByNameOnly,               # If set, skip by filename only (ignore file size)
-  [switch]$NoDateFolders,                # If set, do not create year / year-month subfolders
-  [switch]$Progress,                     # Show progress bars
-  [switch]$DeleteAfterCopy,              # Move instead of copy (rarely used with iPhone)
-  [int]$TimeoutSeconds = 20,             # Wait budget for MTP confirmations & polls
+  [switch]$SkipByNameOnly,
+  [switch]$NoDateFolders,
+  [switch]$Progress,
+  [switch]$DeleteAfterCopy,
+  [int]$TimeoutSeconds = 20,
 
-  # ========= Structure / Diagnostics =========
-  [switch]$ListStructure,                # Print device structure + counts
-  [switch]$ListOnly,                     # Only list structure, then exit
+  # Structure / diagnostics
+  [switch]$ListStructure,
+  [switch]$ListOnly,
 
-  # ========= UI Keep-Alive =========
-  [switch]$Heartbeat,                    # Background Write-Progress heartbeat during enumeration
-  [switch]$TextPulse,                    # Console spinner during long COM calls
+  # UI keep-alive
+  [switch]$Heartbeat,
+  [switch]$TextPulse,
 
-  # ========= Local Staging =========
-  [string]$StageDir = (Join-Path $env:TEMP 'CopyFromIPhone_Stage'), # Stage path to avoid OneDrive/KFM quirks
+  # Local staging to avoid OneDrive/KFM quirks
+  [string]$StageDir = (Join-Path $env:TEMP 'CopyFromIPhone_Stage'),
 
-  # ========= Confirmation / Poll Tuning =========
-  [int]$ConfirmMaxWaitSec = 30,          # Upper bound when confirming staged copies
-  [int]$ConfirmPollMs     = 250,         # Poll interval for staged arrival
+  # Confirm/poll tuning
+  [int]$ConfirmMaxWaitSec = 30,
+  [int]$ConfirmPollMs     = 250,
 
-  # ========= Streaming / Scale Knobs =========
-  [string]$OnlyFolderName,               # Restrict to a single DCIM subfolder name
-  [int]$MaxFolders = 0,                  # Limit number of DCIM subfolders processed
+  # --- New streaming / scale knobs ---
+  [string]$OnlyFolderName,
+  [int]$MaxFolders = 0,
 
-  [switch]$Checkpoint,                   # Persist per-folder done list (resume)
+  [switch]$Checkpoint,
   [string]$CheckpointPath = (Join-Path $env:TEMP 'CopyFromIPhone.checkpoint.json'),
 
-  [int]$StageFlushEvery = 50,            # Periodic cleanup cadence of stale stage files
-  [int]$YieldMs = 50,                    # Tiny sleep between items to keep UI responsive
+  [int]$StageFlushEvery = 50,
+  [int]$YieldMs = 50,
 
-  [switch]$StrictExtensions,             # Require resolvable extension (skip unknowns)
-  [int]$MinFreeGB = 2                    # Warn if free space less than this on Dest/Stage drives
+  [switch]$StrictExtensions,
+  [int]$MinFreeGB = 2
 )
 
-# --------------------------- Global UX defaults ---------------------------
+# --------------------------- MAX-VERBOSE UX ---------------------------
 $ErrorActionPreference = 'Stop'
 $VerbosePreference     = 'Continue'
 $global:ProgressPreference = 'Continue'
@@ -86,7 +84,6 @@ $Progress  = $true
 $Heartbeat = $true
 $TextPulse = $true
 
-# Minimal console helpers (repo uses richer ones in Run-Pipeline.ps1)
 function Write-Info    ($m){ Write-Host $m -ForegroundColor Cyan }
 function Write-Success ($m){ Write-Host $m -ForegroundColor Green }
 function Write-Warn    ($m){ Write-Host $m -ForegroundColor Yellow }
@@ -95,15 +92,14 @@ function Write-Err     ($m){ Write-Host $m -ForegroundColor Red }
 $__savedProgressPref = $global:ProgressPreference
 function Restore-ProgressPreference { try { $global:ProgressPreference = $__savedProgressPref } catch {} }
 
-# --------------------------- Spinner & Heartbeat (keep-alive) ---------------------------
-# Spinner keeps a single console line animating during slow COM/MTP operations
+# Spinner
 $script:__spinIdx = 0
 $script:__spinSeq = @('|','/','-','\')
 function Spin-Start([string]$label){ if($TextPulse){ $script:__spinIdx=0; Write-Host ("{0} {1}" -f $script:__spinSeq[$script:__spinIdx],$label) -NoNewline } }
 function Spin-Tick ([string]$label){ if($TextPulse){ $script:__spinIdx=($script:__spinIdx+1)%$script:__spinSeq.Count; $c=$script:__spinSeq[$script:__spinIdx]; Write-Host ("`r{0} {1}" -f $c,$label) -NoNewline } }
 function Spin-Stop(){ if($TextPulse){ Write-Host "`r   " -NoNewline; Write-Host "" } }
 
-# Heartbeat shows a persistent Write-Progress while enumerating MTP
+# Heartbeat
 $HB_ID = 777
 function HB-Start([string]$Activity,[string]$Status){ if($Heartbeat){ Write-Progress -Id $HB_ID -Activity $Activity -Status $Status -PercentComplete 0 } }
 function HB-Tick([int]$Step,[int]$Total,[string]$Status){
@@ -114,7 +110,7 @@ function HB-Tick([int]$Step,[int]$Total,[string]$Status){
 }
 function HB-Stop(){ if($Heartbeat){ Write-Progress -Id $HB_ID -Activity "Enumerating device (MTP)" -Status "Ready" -Completed } }
 
-# --------------------------- Ensure STA (PowerShell 7+) for Shell COM ---------------------------
+# --- Ensure STA for Shell.Application on PowerShell 7+ ---
 try { $isCore = ($PSVersionTable.PSEdition -eq 'Core') } catch { $isCore = $false }
 try { $apt   = [System.Threading.Thread]::CurrentThread.ApartmentState } catch { $apt = 'Unknown' }
 
@@ -130,7 +126,6 @@ if ($isCore -and $apt -ne [System.Threading.ApartmentState]::STA -and $PSCommand
     if (-not (Test-Path $exe)) { $exe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" }
   }
 
-  # Rebuild arguments excluding common parameters that can break invocation
   $args = @('-STA','-NoLogo','-NoProfile','-File',"`"$PSCommandPath`"")
   $skipCommons = @('Verbose','Debug','WarningAction','ErrorAction','InformationAction','ProgressAction','VerbosePreference','ErrorVariable','WarningVariable','InformationVariable','OutVariable','OutBuffer','PipelineVariable')
   foreach($kv in $PSBoundParameters.GetEnumerator()){
@@ -159,7 +154,6 @@ $KNOWN_EXT_ORDER = @(
 function Test-IsFolder { param($Item) try { return [bool]$Item.IsFolder } catch { return $false } }
 function Test-Name     { param($Item) try { return [string]$Item.Name } catch { return '(unknown)' } }
 
-# Normalize-Folder coerces various wrappers to a COM folder handle
 function Normalize-Folder {
   param([Parameter(Mandatory)][object]$Folder)
   if ($Folder -is [__ComObject]) { return $Folder }
@@ -173,7 +167,6 @@ function Normalize-Folder {
   return $null
 }
 
-# Resilient enumeration helpers to mitigate transient MTP errors
 function Safe-Items {
   param([Parameter(Mandatory)][object]$Folder,[int]$Retries=3,[int]$DelayMs=150)
   $f = Normalize-Folder $Folder
@@ -230,7 +223,7 @@ function WarmUp-NameSpace { param([object]$ns,[int]$Passes=1)
   try { for($i=1;$i -le $Passes;$i++){ $null = @($ns.Items()) | Out-Null } } catch {}
 }
 
-# Verbose warmup to stabilize MTP folders before scan/copy
+# >>> VERBOSE WarmUp-MTPFolder <<<
 function WarmUp-MTPFolder {
   [CmdletBinding()]
   param(
@@ -278,6 +271,7 @@ function WarmUp-MTPFolder {
   _Out ("=== WarmUp-MTPFolder: done • {0} ms total • Touched:{1} Files:{2} Folders:{3} Errors:{4} ===" -f $total.Elapsed,$total.Touched,$total.Files,$total.Folders,$total.Errors) Cyan
   HB-Stop; Write-Progress -Activity "Enumerating MTP" -Completed; return $total
 }
+# <<< END WarmUp-MTPFolder >>>
 
 function Get-StableMtpItemCount{
   param([object]$ShellFolder,[int]$MaxRounds=6,[int]$WaitSec=2)
@@ -296,7 +290,7 @@ function Get-StableMtpItemCount{
   return $prev
 }
 
-# Diagnostics: list visible portable devices & their first-level children
+# Diagnostics: list devices
 function List-MTPDevices {
   try { $shell = New-Object -ComObject Shell.Application } catch { Write-Err "Shell.Application failed: $($_.Exception.Message)"; return }
   $pc = $shell.NameSpace('shell:MyComputerFolder'); if (-not $pc) { Write-Err "Cannot open 'This PC'."; return }
@@ -319,7 +313,7 @@ function List-MTPDevices {
   Write-Info "-----------------------------------------------"
 }
 
-# --------------------------- Robust Shell Copy to Stage ---------------------------
+# Robust CopyHere/MoveHere with warmups (stay no-UI)
 function CopyTo-ShellFolder {
   param(
     [Parameter(Mandatory)][object]$ParentShellFolder,
@@ -348,7 +342,7 @@ function CopyTo-ShellFolder {
   if (-not $beforeBytes) { $beforeBytes = 0 }
   Write-Verbose ("[Copy] Pre-count: {0} | Pre-bytes: {1} | File: {2}" -f $beforeCount, $beforeBytes, $Label)
 
-  # Prefer no-UI flags to avoid Explorer prompts
+  # Always prefer no-UI flags
   $FOF_SILENT=0x0004; $FOF_NOCONFIRMATION=0x0010; $FOF_NOCONFIRMMKDIR=0x0200; $FOF_NOERRORUI=0x0400; $FOF_NOCOPYSECURITYATTRIBS=0x1000; $FOF_SIMPLEPROGRESS=0x0100
   $NOUI_FLAGS = [int]($FOF_SILENT -bor $FOF_NOCONFIRMATION -bor $FOF_NOCONFIRMMKDIR -bor $FOF_NOERRORUI -bor $FOF_NOCOPYSECURITYATTRIBS)
   $ALT_FLAGS  = [int]($FOF_SILENT -bor $FOF_NOCONFIRMATION -bor $FOF_NOERRORUI -bor $FOF_NOCOPYSECURITYATTRIBS -bor $FOF_SIMPLEPROGRESS)
@@ -414,7 +408,7 @@ function Classify-Item{ param([__ComObject]$i,[string]$nameWithExt)
   $e = Get-LowerExtFromName $nameWithExt
   if($IMAGE_EXT -contains $e){ return 'Image' }
   if($VIDEO_EXT -contains $e){ return 'Video' }
-  'Image' # default
+  'Image'
 }
 function Get-ItemDate{ param([__ComObject]$p,[__ComObject]$i)
   try{ $d=$p.GetDetailsOf($i,12); if([string]::IsNullOrWhiteSpace($d)){ $d=$p.GetDetailsOf($i,3) }; if(-not [string]::IsNullOrWhiteSpace($d)){ return [datetime]::Parse($d) } }catch{}
@@ -450,7 +444,7 @@ function Get-ItemSizeBytes{ param([__ComObject]$p,[__ComObject]$i)
   }catch{}
 }
 
-# --------------------------- Resolver: Locate Device + DCIM ---------------------------
+# --------------------------- Resolver ---------------------------
 function Resolve-DeviceRoot {
   param([string]$DeviceName,[string]$StorageFolderName = 'Internal Storage')
 
@@ -520,7 +514,7 @@ function Show-Structure { param([object]$RootFolder,[string]$Mode,[object[]]$Can
   Write-Host "----- END STRUCTURE -----" -ForegroundColor Magenta
 }
 
-# --------------------------- Reopen helpers & name resolution ---------------------------
+# --------------------------- NEW: Reopen + name list + smart ParseName ---------------------------
 function Reopen-ChildFolderByName {
   param(
     [Parameter(Mandatory)][object]$ParentFolder,
@@ -578,7 +572,7 @@ function Try-ParseNameSmart {
   $null
 }
 
-# --------------------------- Free space & checkpoint ---------------------------
+# --------------------------- NEW: Free-space + checkpoint helpers ---------------------------
 function Get-DriveRoot([string]$path){
   try { return [IO.Path]::GetPathRoot((Resolve-Path $path -ErrorAction Stop).Path) } catch { return $null }
 }
@@ -623,26 +617,23 @@ function Save-Checkpoint { param($p,$obj)
 Write-Info "===== START: CopyFromIPhone.ps1 (MAX+ROBUST+STREAM) ====="
 
 try {
-  # Elevated consoles can break MTP copy confirmations; warn the user.
   $IsElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
   ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   if ($IsElevated) { Write-Warn "[Warn] Session is elevated (Admin). MTP copies can fail in elevated windows. Use a normal console if possible." }
 } catch {}
 
-# Build destination skeleton + stage
 $imgRoot = Join-Path $Destination 'Images'
 $vidRoot = Join-Path $Destination 'Videos'
 foreach($p in @($Destination,$imgRoot,$vidRoot,$StageDir)){ if(-not (Test-Path $p)){ New-Item -ItemType Directory -Path $p | Out-Null } }
 
-# Free space sanity checks
 Assert-FreeSpace -path $StageDir -minGb $MinFreeGB
 Assert-FreeSpace -path $Destination -minGb $MinFreeGB
 
 $t = [Diagnostics.Stopwatch]::StartNew()
+
 $cp = if($Checkpoint){ Load-Checkpoint -p $CheckpointPath } else { @{ Folders = @{} } }
 
 try{
-  # -------- Resolve device / DCIM root --------
   $root = $null
   try { $root = Resolve-DeviceRoot -DeviceName $DeviceName -StorageFolderName $StorageFolderName }
   catch {
@@ -662,7 +653,6 @@ try{
   $modeText = if ($root.Mode) { [string]$root.Mode } else { '(unknown)' }
   Write-Host ("[Info] Root mode:  {0}" -f $modeText) -ForegroundColor Magenta
 
-  # Collect target subfolders (newest-first by name)
   $subs = @()
   if($modeText -eq 'DCIM'){
     $subs = @(Safe-Items -Folder $rf | Where-Object { Test-IsFolder $_ })
@@ -674,6 +664,7 @@ try{
     $subs = @($allKids | Where-Object { Test-IsFolder $_ })
   }
 
+  # Newest-first by name; optional filter/limit
   $subs = $subs | Sort-Object { Test-Name $_ } -Descending
   if ($OnlyFolderName) { $subs = $subs | Where-Object { (Test-Name $_) -eq $OnlyFolderName } }
   if ($MaxFolders -gt 0) { $subs = $subs | Select-Object -First $MaxFolders }
@@ -683,7 +674,6 @@ try{
     if($ListOnly){ return }
   }
 
-  # If media at root, treat as a pseudo-folder "(root)"
   if(-not $subs -or $subs.Count -eq 0){ Write-Warn "[MTP] No subfolders; using root."; $subs=@() }
   $rootFiles=@(Safe-Items -Folder $rf | Where-Object { -not (Test-IsFolder $_) })
   if($rootFiles.Count -gt 0){
@@ -715,7 +705,7 @@ try{
       continue
     }
 
-    # Restore per-folder checkpoint state
+    # Checkpoint restore for this folder
     $doneSet = @{}
     if($Checkpoint){
       $folderMap = $cp.Folders
@@ -724,7 +714,7 @@ try{
       }
     }
 
-    # ===== Warmup and stabilize enumeration =====
+    # ===== PER-FOLDER WARMUP =====
     Write-Verbose ("[Scan] Folder {0}/{1}: {2}" -f $folderIdx,$folderCount,$sfName)
     $pct=[int]( ($folderIdx/[double]$folderCount)*100 )
     Write-Progress -Id 10 -Activity "Scanning device folders" -Status ("Folder: {0}" -f $sfName) -PercentComplete $pct
@@ -734,14 +724,14 @@ try{
     [void](Get-StableMtpItemCount -ShellFolder $folder -MaxRounds 4 -WaitSec ([Math]::Max([int]($TimeoutSeconds/8),1)))
     Spin-Stop; HB-Stop
 
-    # ===== Build file name list =====
+    # ===== BUILD NAME LIST =====
     $fileNames = Get-SafeFileNameList -Folder $folder
     if($fileNames.Count -eq 0){ $emptyRounds++ } else { $emptyRounds=0 }
     if($emptyRounds -ge 3){ throw "Device appears unavailable (no items visible multiple rounds). Is it unplugged or locked?" }
 
     Write-Verbose ("[Scan] {0}: discovered {1} files" -f $sfName,$fileNames.Count)
 
-    # ===== Copy by name; re-open folder handle per iteration =====
+    # ===== COPY BY NAME; RE-OPEN THE FOLDER HANDLE EACH TIME =====
     $fileIdx=0
     foreach($fn in $fileNames){
       $fileIdx++; $tot++
@@ -766,7 +756,7 @@ try{
         $skip++; continue
       }
 
-      # Resolve final name (with extension)
+      # Final name with extension
       $fnResolved = $fn
       if(-not $fnResolved.Contains('.')){
         try { $disp = Get-DisplayNameWithExtension -Parent $folder -Item $it; if($disp){ $fnResolved = $disp } } catch {}
@@ -776,35 +766,33 @@ try{
         $skip++; if($YieldMs -gt 0){ Start-Sleep -Milliseconds $YieldMs }; continue
       }
 
-      # Checkpoint skip
+      # Checkpoint guard
       if($Checkpoint -and $doneSet.ContainsKey($fnResolved)){
         Write-Host ("[Skip] {0} (checkpoint)" -f $fnResolved) -ForegroundColor DarkYellow
         $skip++; if($YieldMs -gt 0){ Start-Sleep -Milliseconds $YieldMs }; continue
       }
 
-      # Determine final destination folder and precompute size
       $k = Classify-Item -i $it -nameWithExt $fnResolved
       $d = Get-ItemDate $folder $it
       $finalDest = Get-DestinationFolder -Root $Destination -Kind $k -When $d -NoDateFolders:$NoDateFolders
       $s = Get-ItemSizeBytes $folder $it
 
-      # Per-folder progress
       $pctFile=[int]( ($fileIdx/[Math]::Max(1,$fileNames.Count))*100 )
       $msg = "[{0}/{1}] {2}: {3}/{4}  {5}" -f $folderIdx,$folderCount,$sfName,$fileIdx,$fileNames.Count,$fnResolved
       Write-Progress -Id 11 -Activity ("Copying {0} files" -f $k) -Status $msg -PercentComplete $pctFile
 
-      # ===== Final destination duplicate guard =====
+      # -------- Final destination duplicate guard (unchanged) --------
       if(Test-AlreadyExists -DestFolder $finalDest -FileName $fnResolved -SizeBytes $s -ByNameOnly:$SkipByNameOnly){
         $existsSuffix = if($SkipByNameOnly){ '' } else { '/size' }
         Write-Host ("[Skip] {0} → {1} (exists{2})" -f $fnResolved,$finalDest,$existsSuffix) -ForegroundColor DarkYellow
         $skip++; if($YieldMs -gt 0){ Start-Sleep -Milliseconds $YieldMs }; continue
       }
 
-      # Ensure stage/<Kind> exists
+      # Stage dir per kind
       $stageKindDir = Get-MediaBasePath -Root $StageDir -Kind $k
       if(-not (Test-Path $stageKindDir)){ New-Item -ItemType Directory -Path $stageKindDir | Out-Null }
 
-      # ===== Stage duplicate guard to prevent Explorer prompts =====
+      # -------- NEW: Stage duplicate guard to prevent prompts --------
       $stageCandidate = Join-Path $stageKindDir $fnResolved
       if(Test-Path $stageCandidate){
         if($SkipByNameOnly){
@@ -817,21 +805,22 @@ try{
               Write-Host ("[Skip] (staged/size) {0} → {1} (exists/size)" -f $fnResolved,$stageKindDir) -ForegroundColor DarkYellow
               $skip++; if($YieldMs -gt 0){ Start-Sleep -Milliseconds $YieldMs }; continue
             } else {
-              # Stale partial -> remove so Shell copy won't prompt
+              # stale partial from prior run — clean it so shell copy won't prompt
               Write-Verbose "[Stage] Removing stale staged file with mismatched size."
               Remove-Item -LiteralPath $stageCandidate -Force -ErrorAction SilentlyContinue
             }
           }catch{
+            # can't read size — safest is remove and proceed
             Remove-Item -LiteralPath $stageCandidate -Force -ErrorAction SilentlyContinue
           }
         }
       }
 
       try {
-        # ===== Copy to Stage (no-UI flags inside) =====
+        # Shell copy to Stage (no-UI flags inside)
         CopyTo-ShellFolder -ParentShellFolder $folder -ShellItem $it -DestFolder $stageKindDir -Label $fnResolved -DeleteSource:$DeleteAfterCopy
 
-        # Confirm staged arrival (name-hit first, then delta-count fallback)
+        # Confirm arrival in Stage
         $deadline    = (Get-Date).AddSeconds([Math]::Max($TimeoutSeconds,$ConfirmMaxWaitSec))
         $arrived     = $false
         $stageFile   = $null
@@ -869,10 +858,10 @@ try{
           $fail++; if($YieldMs -gt 0){ Start-Sleep -Milliseconds $YieldMs }; continue
         }
 
-        # Compute final target, re-check for duplicates, then flip Stage → Final
         $finalName = [IO.Path]::GetFileName($stageFile)
         $finalPath = Join-Path $finalDest $finalName
 
+        # Final duplicate check again (belt & braces)
         if($SkipByNameOnly){
           if(Test-Path $finalPath){
             Write-Host ("[Skip] {0} → {1} (exists)" -f $finalName,$finalDest) -ForegroundColor DarkYellow
@@ -897,7 +886,6 @@ try{
         Write-Host ("[File] {0} → {1}" -f $finalName,$finalDest) -ForegroundColor Green
         $ok++
 
-        # Update checkpoint
         if($Checkpoint){
           if(-not $cp.Folders.ContainsKey($sfName)){ $cp.Folders[$sfName] = @() }
           $cp.Folders[$sfName] += $finalName
@@ -905,7 +893,6 @@ try{
           $doneSet[$finalName] = $true
         }
 
-        # Periodic stage cleanup and tiny UI yield
         if(($ok + $skip + $fail) % [Math]::Max(1,$StageFlushEvery) -eq 0){
           try{
             Get-ChildItem -LiteralPath $StageDir -Recurse -File -ErrorAction SilentlyContinue |
@@ -919,7 +906,6 @@ try{
 
       }
       catch{
-        # Copy failure: log, purge any fresh partials, continue
         Write-Err ("[Error] {0} → {1} : {2}" -f $fnResolved,$finalDest,$_.Exception.Message)
         $fail++
         try{

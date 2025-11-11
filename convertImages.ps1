@@ -47,97 +47,63 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# =============================================================================
-#  PINNED BOTTOM PROGRESS BAR (RawUI)
-# =============================================================================
+# ---------------- Bottom bar helpers ----------------
 $script:__barClock   = [System.Diagnostics.Stopwatch]::StartNew()
 $script:__barLastMs  = -99999
 $script:__barLastPct = -1
 
-function _RawUI   { try { $Host.UI.RawUI } catch { $null } }
-function _WinSize {
-  $r = _RawUI
-  if($null -ne $r){ return $r.WindowSize } else { return (New-Object System.Management.Automation.Host.Size(120,30)) }
-}
-function _WinTop { $r=_RawUI; if($null -ne $r){ $r.WindowTop } else { 0 } }
-function _Cursor { $r=_RawUI; if($null -ne $r){ $r.CursorPosition } else { New-Object System.Management.Automation.Host.Coordinates(0,0) } }
-function _SetCursor([int]$x,[int]$y){ $r=_RawUI; if($null -ne $r){ $r.CursorPosition = New-Object System.Management.Automation.Host.Coordinates($x,$y) } }
-
-function _ConsoleWidth { $ws=_WinSize; [Math]::Max(40, $ws.Width) }
+function _ConsoleWidth { try { [Math]::Max(40, $Host.UI.RawUI.WindowSize.Width) } catch { 120 } }
 function Format-TS([TimeSpan]$ts){ if ($ts.TotalHours -ge 1) { "{0:hh\:mm\:ss}" -f $ts } else { "{0:mm\:ss}" -f $ts } }
 
-function _PinnedBar_Draw {
+function _DrawWideBar {
   param([int]$pct,[string]$note)
-  if($NoProgress){ return }
-
+  if($NoProgress){return}
   $pct  = [Math]::Max(0,[Math]::Min(100,$pct))
   $w    = _ConsoleWidth
-  $note = ($note -replace "`r|`n"," ").Trim()
+  $note = $note -replace "`r"," " -replace "`n"," "
 
-  # stable width bar; status string is truncated to fit the row width
+  # Left-aligned: fixed bar width (40% of console width) for stability
   $barW = [Math]::Max(10,[Math]::Floor($w * 0.4))
   $fill = [Math]::Floor(($pct/100.0)*$barW)
   $bar  = '▏'+('█'*$fill)+('─'*($barW-$fill))+'▕'
 
-  $statusW = [Math]::Max(0, $w - ($bar.Length + 1))
-  if($note.Length -gt $statusW){ $note = $note.Substring(0, [Math]::Max(0,$statusW-1)) }
-
-  $pos  = _Cursor
-  $ws   = _WinSize
-  $y    = (_WinTop) + $ws.Height - 1
-
-  _SetCursor 0 $y
-  Write-Host (' ' * $w) -NoNewline               # clear last row
-  _SetCursor 0 $y
-  Write-Host ("{0} {1}" -f $bar,$note) -NoNewline -ForegroundColor $BarColor
-
-  _SetCursor $pos.X $pos.Y                       # restore cursor
+  Write-Host ("`r{0} {1}" -f $bar,$note) -NoNewline -ForegroundColor $BarColor
+}
+function _ClearWideBar {
+  if($NoProgress){return}
+  $w=_ConsoleWidth
+  Write-Host ("`r"+(' '*$w)+"`r") -NoNewline
+}
+function _UpdateBarCore {
+  param([int]$done,[int]$total,[Diagnostics.Stopwatch]$timer,[string]$status)
+  if($NoProgress){return}
+  $done=[Math]::Max(0,[Math]::Min($total,$done))
+  $pct=[int]([Math]::Floor(($done/[double][Math]::Max(1,$total))*100))
+  $elapsed=$timer.Elapsed
+  $rate  = if($done -gt 0){ $elapsed.TotalSeconds / $done } else { 0 }
+  $remain= if($rate -gt 0){ [TimeSpan]::FromSeconds([int]($rate*($total-$done))) } else { [TimeSpan]::Zero }
+  $note=("[{0,3}%] elapsed {1} • ETA {2} • {3}" -f $pct,(Format-TS $elapsed),(Format-TS $remain),$status)
+  _DrawWideBar -pct $pct -note $note
   $script:__barLastPct = $pct
 }
-
-function _PinnedBar_UpdateCore {
-  param([int]$done,[int]$total,[Diagnostics.Stopwatch]$timer,[string]$status)
-  if($NoProgress){ return }
-  $done   = [Math]::Max(0,[Math]::Min($total,$done))
-  $pct    = [int]([Math]::Floor(($done/[double][Math]::Max(1,$total))*100))
-  $elapsed= $timer.Elapsed
-  $rate   = if($done -gt 0){ $elapsed.TotalSeconds / $done } else { 0 }
-  $remain = if($rate -gt 0){ [TimeSpan]::FromSeconds([int]($rate*($total-$done))) } else { [TimeSpan]::Zero }
-  $note   = ("[{0,3}%] elapsed {1} • ETA {2} • {3}" -f $pct,(Format-TS $elapsed),(Format-TS $remain),$status)
-  _PinnedBar_Draw -pct $pct -note $note
-}
-
-function _PinnedBar_Update {
+function _UpdateBarSmart {
   param([int]$done,[int]$total,[Diagnostics.Stopwatch]$timer,[string]$status,[switch]$Force)
-  if($NoProgress){ return }
-  $now   = $script:__barClock.ElapsedMilliseconds
-  $pctNow= [int]([Math]::Floor(([Math]::Min($total,[Math]::Max(0,$done)) / [double][Math]::Max(1,$total))*100))
+  if($NoProgress){return}
+  $now = $script:__barClock.ElapsedMilliseconds
+  $pctNow=[int]([Math]::Floor(([Math]::Min($total,[Math]::Max(0,$done)) / [double][Math]::Max(1,$total))*100))
   if($Force -or ($pctNow -ne $script:__barLastPct) -or ($now -ge ($script:__barLastMs + $BarDebounceMs))){
-    _PinnedBar_UpdateCore -done $done -total $total -timer $timer -status $status
+    _UpdateBarCore -done $done -total $total -timer $timer -status $status
     $script:__barLastMs = $now
   }
 }
 
-function _PinnedBar_Clear {
-  if($NoProgress){ return }
-  $w  = _ConsoleWidth
-  $ws = _WinSize
-  $y  = (_WinTop) + $ws.Height - 1
-  $pos= _Cursor
-  _SetCursor 0 $y
-  Write-Host (' ' * $w) -NoNewline
-  _SetCursor $pos.X $pos.Y
-}
+# --- colored output helpers (clear bar before printing) ---
+function Write-Info    { param([string]$m) _ClearWideBar; Write-Host $m -ForegroundColor Cyan }
+function Write-Success { param([string]$m) _ClearWideBar; Write-Host $m -ForegroundColor Green }
+function Write-Skip    { param([string]$m) _ClearWideBar; Write-Host $m -ForegroundColor DarkYellow }
+function Write-Fail    { param([string]$m) _ClearWideBar; Write-Host $m -ForegroundColor Red }
 
-# Plain color helpers (bar redraw is handled by calls to _PinnedBar_Update)
-function Write-Info    { param([string]$m) Write-Host $m -ForegroundColor Cyan }
-function Write-Success { param([string]$m) Write-Host $m -ForegroundColor Green }
-function Write-Skip    { param([string]$m) Write-Host $m -ForegroundColor DarkYellow }
-function Write-Fail    { param([string]$m) Write-Host $m -ForegroundColor Red }
-
-# =============================================================================
-#  Date / tool helpers (unchanged logic)
-# =============================================================================
+# --- detect seconds in time string ---
 function Test-HasSecondsInString {
   param([string]$s)
   if (-not $s) { return $false }
@@ -146,6 +112,7 @@ function Test-HasSecondsInString {
   return ($m.Success -and $m.Groups[3].Success)
 }
 
+# --- robust date parsing ---
 function Parse-Date {
   param([string]$s)
   if (-not $s) { return $null }
@@ -166,6 +133,7 @@ function Parse-Date {
   return $null
 }
 
+# --- converter discovery ---
 function Resolve-ConverterTool {
   param([string]$ToolPath)
   if ($ToolPath) {
@@ -198,6 +166,7 @@ function Get-IM-Dates {
   return $stdout -split "`n" | ForEach-Object { $_.Trim() }
 }
 
+# --- improved DateTaken ---
 function Get-DateTaken {
   param([IO.FileInfo]$File, [hashtable]$ToolOrNull = $null)
   try {
@@ -215,14 +184,16 @@ function Get-DateTaken {
             [Globalization.DateTimeStyles]::AssumeLocal,[ref]$dtShell)){
             if (Test-HasSecondsInString $val) { return $dtShell }
 
+            # try EXIF via ImageMagick
             $toolLocal = $ToolOrNull
             if (-not $toolLocal) { try { $toolLocal = Resolve-ConverterTool -ToolPath $ToolPath } catch { $toolLocal=$null } }
             if ($toolLocal -and $toolLocal.Type -eq 'magick') {
               try {
                 $candidates = Get-IM-Dates -ToolPath $toolLocal.Path -FullName $File.FullName
-                foreach($raw in $candidates){ $dtExif=Parse-Date $raw; if($dtExif){return $dtExif} }
+                foreach($raw in $candidates){ $dtExif=Parse-Date $raw; if($dtExif){return $dtExif}}
               } catch {}
             }
+            # patch seconds if shell time has no seconds
             $fs = $File.LastWriteTime
             return (Get-Date -Year $dtShell.Year -Month $dtShell.Month -Day $dtShell.Day `
                     -Hour $dtShell.Hour -Minute $dtShell.Minute -Second $fs.Second)
@@ -239,6 +210,7 @@ function Get-DateTaken {
   return $File.LastWriteTimeUtc
 }
 
+# --- detect canonical base from name ---
 function Try-GetBaseFromName {
   param([string]$NameNoExt)
   $re='^(?<Y>\d{4})-(?<Mo>\d{2})-(?<D>\d{2})_(?<H>\d{2})-(?<Mi>\d{2})-(?<S>\d{2})(?:_(?<N>\d{2}))?$'
@@ -253,40 +225,31 @@ function Try-GetBaseFromName {
   return $null
 }
 
-# =============================================================================
-#  Resolve paths & inputs
-# =============================================================================
+# --- resolve paths ---
 $InputDir  = (Resolve-Path $InputDir).Path
 if (-not $OutputDir) { $OutputDir = $InputDir } 
 elseif (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null }
 
+# --- scan inputs ---
 $patterns=@('*.heic','*.heif','*.jpg','*.jpeg','*.HEIC','*.HEIF','*.JPG','*.JPEG')
 $gci=@{LiteralPath=$InputDir;File=$true;ErrorAction='SilentlyContinue'}
 if($Recurse){$gci.Recurse=$true}
 $files=Get-ChildItem @gci -Include $patterns | Sort-Object FullName
+if(-not $files){ Write-Skip "No HEIC/JPG files in '$InputDir'."; return }
 
-if(-not $files){
-  Write-Skip "No HEIC/JPG files in '$InputDir'."
-  _PinnedBar_Clear
-  return
-}
-
-# =============================================================================
-#  Main loop — bar updates on every file (including skips)
-# =============================================================================
+# --- process ---
 $sw=[Diagnostics.Stopwatch]::StartNew()
 [int]$ok=0;[int]$skip=0;[int]$fail=0
 $total=$files.Count
 $seen=@{}
 $toolEnc=$null
 
-_PinnedBar_Update -done 0 -total $total -timer $sw -status "[0/$total] starting..." -Force
+_UpdateBarSmart -done 0 -total $total -timer $sw -status "[0/$total] starting..." -Force
 
 for($i=0;$i -lt $total;$i++){
   $idx=$i+1
   $src=$files[$i]
   $nameNoExt=[IO.Path]::GetFileNameWithoutExtension($src.Name)
-
   $base=Try-GetBaseFromName -NameNoExt $nameNoExt
   if(-not $base){ $dt=Get-DateTaken -File $src; $base=$dt.ToLocalTime().ToString('yyyy-MM-dd_HH-mm-ss') }
 
@@ -294,14 +257,12 @@ for($i=0;$i -lt $total;$i++){
   $suffix=if($seen[$base]-gt 0){'_{0:D2}' -f $seen[$base]}else{''}
   $targetName="$base$suffix.$Format"; $outPath=Join-Path $OutputDir $targetName
 
-  # pre-draw
-  _PinnedBar_Update -done ($idx-1) -total $total -timer $sw -status ("[{0}/{1}] {2} → {3}" -f $idx,$total,$src.Name,$targetName)
+  _UpdateBarSmart -done ($idx-1) -total $total -timer $sw -status ("[{0}/{1}] {2} → {3}" -f $idx,$total,$src.Name,$targetName)
 
   if($SkipExisting -and (Test-Path $outPath)){
     $skip++
     Write-Skip ("[{0}/{1}] Skip (exists) {2} → {3}" -f $idx,$total,$src.Name,$outPath)
-    # update the bar for this skip as well
-    _PinnedBar_Update -done $idx -total $total -timer $sw -status ("[{0}/{1}] skipped (exists) {2}" -f $idx,$total,(Split-Path -Leaf $outPath))
+    _UpdateBarSmart -done $idx -total $total -timer $sw -status ("[{0}/{1}] skipped (exists) {2}" -f $idx,$total,(Split-Path -Leaf $outPath)) -Force
     continue
   }
 
@@ -321,14 +282,12 @@ for($i=0;$i -lt $total;$i++){
           $args+='-define png:exclude-chunk=all'
         }
         $args+=('"{0}"' -f $outPath)
-
         $psi=New-Object Diagnostics.ProcessStartInfo
         $psi.FileName=$toolEnc.Path
         $psi.Arguments=($args -join ' ')
         $psi.UseShellExecute=$false
         $psi.RedirectStandardError=$true
         $psi.RedirectStandardOutput=$true
-
         $p=[Diagnostics.Process]::Start($psi);$p.WaitForExit()
         if($p.ExitCode -ne 0 -or -not (Test-Path $outPath)){throw "magick failed (code $($p.ExitCode))"}
       } elseif($toolEnc.Type -eq 'heif') {
@@ -347,14 +306,15 @@ for($i=0;$i -lt $total;$i++){
     }
     $ok++; Write-Success ("[OK] {0}/{1} {2}" -f $idx,$total,$targetName)
   } catch {
-    $fail++; Write-Fail ("Failed: {0}" -f $src.FullName); Write-Fail ("Reason : {0}" -f $_.Exception.Message)
+    $fail++; Write-Fail ("Failed: {0}" -f $src.FullName)
+    Write-Fail ("Reason : {0}" -f $_.Exception.Message)
   }
 
-  _PinnedBar_Update -done $idx -total $total -timer $sw -status ("[{0}/{1}] done {2}" -f $idx,$total,$targetName)
+  _UpdateBarSmart -done $idx -total $total -timer $sw -status ("[{0}/{1}] done {2}" -f $idx,$total,$targetName)
 }
 
-_PinnedBar_Update -done $total -total $total -timer $sw -status ("All images processed") -Force
-_PinnedBar_Clear
+_UpdateBarSmart -done $total -total $total -timer $sw -status ("All images processed") -Force
+_ClearWideBar
 
 $sw.Stop()
 $elapsed=[math]::Round($sw.Elapsed.TotalSeconds,1)

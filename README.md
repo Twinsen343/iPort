@@ -9,7 +9,7 @@ MTP is notoriously unreliable on Windows. It’s not a true filesystem — it’
 - Duplicate protection – Skips or verifies existing files using hashes and safe temp-file staging.
 - Clear progress – Clean, non-ghosting progress bars with explicit “skipped / failed / copied” states.
 
-###Key Features
+### Key Features
 - Safe, resumable import from iPhone or MTP (Internal Storage/DCIM/...)
 - Organized output (Images\YYYY-MM and Videos\YYYY-MM)
 - Conversion via FFmpeg & ImageMagick (H.264/H.265, HEIF to JPG/PNG)

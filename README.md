@@ -1,6 +1,6 @@
 # iPort — iPhone & MTP Windows Media Automation Toolkit
 
-iPort is a modular PowerShell toolkit that automates importing, organizing, and converting iPhone photos and videos on Windows — without iTunes, iCloud, or manual drag-and-drop. It connects directly to MTP (Media Transfer Protocol) devices and uses FFmpeg and ImageMagick to convert and optimize media for storage or business use.
+iPort is a modular PowerShell toolkit that automates importing, organizing, and converting iPhone or MTP photos and videos on Windows — without iTunes, iCloud, or manual drag-and-drop. It connects directly to MTP (Media Transfer Protocol) devices and uses FFmpeg and ImageMagick to convert and optimize media for storage or business use.
 
 ## Why iPort Exists
 MTP is notoriously unreliable on Windows. It’s not a true filesystem — it’s a COM-based object interface that constantly drops connections, hides extensions, and times out during long copies. iPort was built to fix that.

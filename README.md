@@ -127,11 +127,11 @@ $vidArgs = @{
 
 ## Design Philosophy
 
-No iCloud, no Photos app. Direct filesystem control.
-Predictable filenames. Every file includes seconds + unique suffixes.
-Transparent. Every step visible and modifiable.
-Efficient. No re-encode if duplicate or already converted.
-Safe. No overwriting or upscaling.
+- No iCloud, no Photos app. Direct filesystem control.
+- Predictable filenames. Every file includes seconds + unique suffixes.
+- Transparent. Every step visible and modifiable.
+- Efficient. No re-encode if duplicate or already converted.
+- Safe. No overwriting or upscaling.
 
 ## QuickStart
 ```

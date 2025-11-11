@@ -4,13 +4,24 @@ convertVideos.ps1  —  iPort Toolkit
 
 
 #>
+<#
+convertVideos.ps1
+(H.264 — numeric ffprobe gate + bottom [X/Y] progress + ffmpeg machine progress above)
+
+- MOV/MP4/M4V → MP4 (H.264 + AAC), downscale-only ≤1920x1080
+- Output names from capture date: yyyy-MM-dd_HH-mm-ss[_NN].mp4
+- Strict skip for clips ≤ LiveCutoffSec (numeric ffprobe)
+- Uses ffmpeg -progress pipe:1 for accurate within-file ETA
+- ffmpeg one-liners print ABOVE; global [X/Y] bar pinned at bottom (Yellow)
+- NO ghost bars; minimal flashing via smart redraw + batched skip prints
+#>
 
 [CmdletBinding()]
 param(
   [Parameter(Mandatory=$true)] [string]$InputDir,
   [Parameter(Mandatory=$true)] [string]$OutputDir,
   [switch]$Recurse,
-  [switch]$SkipExisting,   # default TRUE applied below for PS5.1
+  [switch]$SkipExisting = $true,
 
   [int]$MaxWidth  = 1920,
   [int]$MaxHeight = 1080,
@@ -38,9 +49,6 @@ param(
   [int]$BarDebounceMs = 120,
   [int]$SkipPrintIntervalMs = 600
 )
-
-# PS5.1-safe default TRUE for -SkipExisting
-if (-not $PSBoundParameters.ContainsKey('SkipExisting')) { $SkipExisting = $true }
 
 $ErrorActionPreference = 'Stop'
 
@@ -73,7 +81,7 @@ function _UpdateBarCore {
   if($NoProgress){return}
   $done  = [Math]::Max(0.0,[Math]::Min([double]$total,[double]$done))
   $pctD  = ($done/[double][Math]::Max(1,$total))*100.0
-  $pct   = [int]([Math]::Floor($pctD))
+  $pct   = [int]([Math]::Floor($pctD))   # floor for stable display
   $elapsed=$timer.Elapsed
   $rateSec= if($done -gt 0){ $elapsed.TotalSeconds / $done } else { 0 }
   $remain= if($rateSec -gt 0){ [TimeSpan]::FromSeconds([int]($rateSec*($total-$done))) } else { [TimeSpan]::Zero }
@@ -85,6 +93,10 @@ function _UpdateBarSmart {
   param([double]$done,[int]$total,[Diagnostics.Stopwatch]$timer,[string]$fileNote,[int]$MinMs,[switch]$Force)
   if($NoProgress){return}
   $now = $script:__barClock.ElapsedMilliseconds
+  # Only redraw if:
+  #  - forced, OR
+  #  - debounce window elapsed, OR
+  #  - integer pct changed
   $pctNow = [int]([Math]::Floor( [Math]::Min(100.0,[Math]::Max(0.0, ($done/[Math]::Max(1,$total))*100.0 )) ))
   if($Force -or ($pctNow -ne $script:__barLastPct) -or ($now -ge ($script:__barLastMs + $MinMs))){
     _UpdateBarCore -done $done -total $total -timer $timer -fileNote $fileNote
@@ -154,7 +166,7 @@ function Probe-StrictNumeric {
   }
   if(-not $dur){
     $lines=ffprobe-NumLine ('-v error -select_streams v:0 -count_frames 1 -show_entries stream=nb_read_frames,avg_frame_rate -of default=nk=1:nw=1 -i "{0}"' -f $Path)
-    $parts=($lines -split "`r?`n") | Where-Object {$_}
+    $parts=($lines -split "`r?`n") | ? {$_}
     if($parts.Count -ge 2){
       $frames=TryParse-DoubleInvariant $parts[0]
       $afr=$parts[1]; if($afr -match '^\d+/\d+$'){
@@ -272,12 +284,12 @@ for($i=0;$i -lt $total;$i++){
     $args += @('-c:a','aac','-b:a',("$AudioBitrateK"+"k"),'-ac','1',
                '-movflags','+faststart','-f','mp4', $tempOut)
 
-    # PS5.1-safe arg string (escape internal quotes)
+    # PS5.1-safe arg string
     $argString = ($args | ForEach-Object {
       if ($_ -match '[\s"]') { '"' + ($_ -replace '"','\"') + '"' } else { $_ }
     }) -join ' '
 
-    # ---- ffmpeg run; parse progress lines ----
+    # ---- ffmpeg run; parse its progress ABOVE; bar smart-redraw ----
     $psi=New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName=$ffmpeg
     $psi.Arguments=$argString
@@ -310,17 +322,15 @@ for($i=0;$i -lt $total;$i++){
             $overallDone = ($idx-1) + $within
 
             _ClearWideBar
-            $speedText   = if($lastSpeed)   { $lastSpeed }   else { '' }
-            $bitrateText = if($lastBitrateK){ $lastBitrateK } else { '' }
             Write-Host ("time={0}  speed={1}x  bitrate={2}k" -f `
               ([TimeSpan]::FromSeconds([int]$curTimeSec).ToString()), `
-              $speedText, $bitrateText)
+              ($lastSpeed ?? ''), ($lastBitrateK ?? ''))
 
             _UpdateBarSmart -done $overallDone -total $total -timer $sw `
               -fileNote ("[{0}/{1}] {2} → {3}" -f $idx,$total,$src.Name,(Split-Path -Leaf $finalOut)) `
               -MinMs $BarDebounceMs
           }
-          'speed'   { $lastSpeed    = ($val -replace 'x$','') }
+          'speed'   { $lastSpeed = ($val -replace 'x$','') }
           'bitrate' {
             $m=[regex]::Match($val,'([0-9.]+)kbits/s'); if($m.Success){ $lastBitrateK = $m.Groups[1].Value }
           }
@@ -366,4 +376,3 @@ _ClearWideBar
 $sw.Stop()
 $summary="Done. Converted: {0}, Skipped: {1}, Failed: {2}. Elapsed: {3:N1}s" -f $ok,$skip,$fail,$sw.Elapsed.TotalSeconds
 if($fail -gt 0){Write-Fail $summary}elseif($skip -gt 0){Write-SkipMsg $summary}else{Write-Success $summary}
-
